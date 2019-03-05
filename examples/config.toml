@@ -1,0 +1,13 @@
+# Which IP and port to listen on (ex: localhost:6660)
+Listen = "localhost:6660"
+
+# Server to connect to (ex: icanhaz.geeknode.org:7000)
+Link = "server.geeknode.org:7000"
+
+# Name and SID of the exporter (ex: 999)
+Name = "prometheus.geeknode.org"
+Sid = 999
+
+# Path to key and cert to use
+Cert = "./cert.pem"
+Key = "./key.pem"
