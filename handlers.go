@@ -134,6 +134,12 @@ func SidHandler(_ *irc.Encoder, message *irc.Message) {
 	// initiate the user count, it'll increase with every UidHandler call
 	users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
+		"mode": "plaintext",
+	}).Set(0)
+
+	users.With(prometheus.Labels{
+		"server": ResolveServer(message.Prefix.String()),
+		"mode": "tls",
 	}).Set(0)
 }
 
@@ -148,17 +154,35 @@ func SquitHandler(_ *irc.Encoder, message *irc.Message) {
 	serversCount.Dec()
 
 	// remove the user count metric as the server doesn't exist anymore
-	users.DeleteLabelValues(hostname)
+	users.DeleteLabelValues(hostname, "plaintext")
+	users.DeleteLabelValues(hostname, "tls")
 }
 
 func QuitHandler(_ *irc.Encoder, message *irc.Message) {
-	users.With(prometheus.Labels{
+	gauge := users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
-	}).Dec()
+		"mode": "tls",
+	})
+
+	if gauge == nil {
+		gauge = users.With(prometheus.Labels{
+			"server": ResolveServer(message.Prefix.String()),
+			"mode": "plaintext",
+		})
+	}
+
+	gauge.Dec()
 }
 
+// UID nickname hopcount timestamp username hostname uid servicestamp umodes virthost cloakedhost ip :gecos
 func UidHandler(_ *irc.Encoder, message *irc.Message) {
+	mode := "plaintext"
+	if strings.Contains(message.Params[7], "z") {
+		mode = "tls"
+	}
+
 	users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
+		"mode": mode,
 	}).Inc()
 }

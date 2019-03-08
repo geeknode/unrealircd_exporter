@@ -8,7 +8,7 @@ var (
 			Name: "irc_users",
 			Help: "Number of currently connected users per server.",
 		},
-		[]string{"server"},
+		[]string{"server", "mode"},
 	)
 
 	eventsCount = prometheus.NewCounterVec(
