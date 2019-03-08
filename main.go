@@ -78,7 +78,7 @@ func RegisterHandler(command string, handler handler) {
 func GetLinkStats(conn *tls.Conn) {
 	for {
 		for _, hostname := range servers {
-			SendRaw(conn, fmt.Sprintf(":999000000 STATS L %s", hostname))
+			SendRaw(conn, fmt.Sprintf(":%s000000 STATS L %s", conf.Sid, hostname))
 		}
 
 		time.Sleep(15 * time.Second)
@@ -148,7 +148,7 @@ func main() {
 
 	// Create our own user so to have ircop capabilities
 	// UID nickname hopcount timestamp username hostname uid servicestamp umodes virthost cloakedhost ip :gecos
-	SendRaw(conn, "UID P 0 0 Prometheus 127.0.0.1 999000000 0 +Soip * prometheus.geeknode.org * :Prometheus")
+	SendRaw(conn, fmt.Sprintf("UID P 0 0 Prometheus 127.0.0.1 %d000000 0 +Soip * %s * :Prometheus", conf.Sid, conf.Name))
 
 	// let's collect link stats
 	go GetLinkStats(conn)
