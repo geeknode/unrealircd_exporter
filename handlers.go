@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 	"gopkg.in/sorcix/irc.v2"
-	"log"
 	"strconv"
 	"strings"
 )
@@ -15,7 +17,7 @@ import (
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P services.geeknode.org[@33.44.55.66.52577][] 0 886999 46386 38403 2604 284301 0
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P fdn.geeknode.org[@44.55.66.77.60589][s] 0 564462 36871 324176 20894 290496 0
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P icanhaz.geeknode.org[@::ffff:55.66.77.88.0][s] 0 872711 56582 3833 261 290504 0
-func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
+func StatsLHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	if message.Params[1] == "SendQ" {
 		// We skip the header
 		return
@@ -26,7 +28,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	sendQ, err := strconv.ParseFloat(message.Params[2], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (SendQ) for %s to float", message.Params[2], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (SendQ) for %s to float", message.Params[2], hostname))
 		return
 	}
 	statsSendQ.With(prometheus.Labels{
@@ -36,7 +38,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	sendM, err := strconv.ParseFloat(message.Params[3], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (SendM) for %s to float", message.Params[3], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (SendM) for %s to float", message.Params[3], hostname))
 		return
 	}
 	statsSendM.With(prometheus.Labels{
@@ -46,7 +48,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	sendBytes, err := strconv.ParseFloat(message.Params[4], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (SendBytes) for %s to float", message.Params[4], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (SendBytes) for %s to float", message.Params[4], hostname))
 		return
 	}
 	statsSendBytes.With(prometheus.Labels{
@@ -56,7 +58,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	rcveM, err := strconv.ParseFloat(message.Params[5], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (RcveM) for %s to float", message.Params[5], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (RcveM) for %s to float", message.Params[5], hostname))
 		return
 	}
 	statsRcveM.With(prometheus.Labels{
@@ -66,7 +68,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	rcveBytes, err := strconv.ParseFloat(message.Params[6], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (RcveBytes) for %s to float", message.Params[6], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (RcveBytes) for %s to float", message.Params[6], hostname))
 		return
 	}
 	statsRcveBytes.With(prometheus.Labels{
@@ -76,7 +78,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	openSince, err := strconv.ParseFloat(message.Params[7], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (Open_Since) for %s to float", message.Params[7], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (Open_Since) for %s to float", message.Params[7], hostname))
 		return
 	}
 	statsOpenSince.With(prometheus.Labels{
@@ -86,7 +88,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 
 	idle, err := strconv.ParseFloat(message.Params[8], 64)
 	if err != nil {
-		log.Printf("Can't convert %s (Idle) for %s to float", message.Params[8], hostname)
+		level.Error(logger).Log("error", fmt.Sprintf("Can't convert %s (Idle) for %s to float", message.Params[8], hostname))
 		return
 	}
 	statsIdle.With(prometheus.Labels{
@@ -98,7 +100,7 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message) {
 // Example:
 // PROTOCTL NOQUIT NICKv2 SJOIN SJOIN2 UMODE2 VL SJ3 TKLEXT TKLEXT2 NICKIP ESVID
 // PROTOCTL CHANMODES=beIqa,kLf,l,psmntirzMQNRTOVKDdGPZSCc PREFIX=(ohv)@%+ NICKCHARS= SID=042 MLOCK TS=1551700803 EXTSWHOIS
-func ProtoctlHandler(_ *irc.Encoder, message *irc.Message) {
+func ProtoctlHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
 	if contains(message.Params, "SID=") {
 		sid := strings.Split(message.Params[3], "=")[1]
 		hostname := strings.Split(conf.Link, ":")[0]
@@ -109,7 +111,7 @@ func ProtoctlHandler(_ *irc.Encoder, message *irc.Message) {
 
 // Example
 // PING icanhaz.geeknode.org
-func PingHandler(encoder *irc.Encoder, message *irc.Message) {
+func PingHandler(encoder *irc.Encoder, message *irc.Message, logger log.Logger) {
 	response := irc.Message{
 		Prefix:  nil,
 		Command: irc.PONG,
@@ -118,13 +120,15 @@ func PingHandler(encoder *irc.Encoder, message *irc.Message) {
 		},
 	}
 
+	level.Debug(logger).Log("msg", "--> %s", response.String())
+
 	err := encoder.Encode(&response)
 	if err != nil {
-		log.Fatal(err)
+		level.Error(logger).Log("error", err.Error())
 	}
 }
 
-func SidHandler(_ *irc.Encoder, message *irc.Message) {
+func SidHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
 	hostname := message.Params[0]
 	sid := message.Params[2]
 
@@ -134,20 +138,20 @@ func SidHandler(_ *irc.Encoder, message *irc.Message) {
 	// initiate the user count, it'll increase with every UidHandler call
 	users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
-		"mode": "plaintext",
+		"mode":   "plaintext",
 	}).Set(0)
 
 	users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
-		"mode": "tls",
+		"mode":   "tls",
 	}).Set(0)
 }
 
-func SquitHandler(_ *irc.Encoder, message *irc.Message) {
+func SquitHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	hostname := message.Params[0]
 	sid, err := FindSidByHostname(hostname)
 	if err != nil {
-		log.Fatalf(err.Error())
+		level.Error(logger).Log("error", err.Error())
 	}
 	delete(servers, sid)
 
@@ -158,16 +162,16 @@ func SquitHandler(_ *irc.Encoder, message *irc.Message) {
 	users.DeleteLabelValues(hostname, "tls")
 }
 
-func QuitHandler(_ *irc.Encoder, message *irc.Message) {
+func QuitHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
 	gauge := users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
-		"mode": "tls",
+		"mode":   "tls",
 	})
 
 	if gauge == nil {
 		gauge = users.With(prometheus.Labels{
 			"server": ResolveServer(message.Prefix.String()),
-			"mode": "plaintext",
+			"mode":   "plaintext",
 		})
 	}
 
@@ -175,7 +179,7 @@ func QuitHandler(_ *irc.Encoder, message *irc.Message) {
 }
 
 // UID nickname hopcount timestamp username hostname uid servicestamp umodes virthost cloakedhost ip :gecos
-func UidHandler(_ *irc.Encoder, message *irc.Message) {
+func UidHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
 	mode := "plaintext"
 	if strings.Contains(message.Params[7], "z") {
 		mode = "tls"
@@ -183,6 +187,6 @@ func UidHandler(_ *irc.Encoder, message *irc.Message) {
 
 	users.With(prometheus.Labels{
 		"server": ResolveServer(message.Prefix.String()),
-		"mode": mode,
+		"mode":   mode,
 	}).Inc()
 }

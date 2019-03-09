@@ -6,15 +6,21 @@ import (
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/promlog"
+	"github.com/prometheus/common/promlog/flag"
+	"gopkg.in/alecthomas/kingpin.v2"
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
+	"github.com/prometheus/common/version"
 	"gopkg.in/sorcix/irc.v2"
-	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 )
 
-type handler func(*irc.Encoder, *irc.Message)
+type handler func(*irc.Encoder, *irc.Message, log.Logger)
 
 var (
 	// holds current list of server, map SID to hostname
@@ -27,8 +33,10 @@ var (
 	conf *Config
 )
 
-func SendRaw(conn *tls.Conn, command string) {
-	fmt.Fprintf(conn, fmt.Sprintf("%s\r\n", command))
+func SendRaw(conn *tls.Conn, command string, logger log.Logger) {
+	raw := fmt.Sprintf("%s\n", command)
+	level.Debug(logger).Log("msg", fmt.Sprintf("--> %s", raw))
+	fmt.Fprintf(conn, raw)
 }
 
 func contains(s []string, e string) bool {
@@ -75,10 +83,10 @@ func RegisterHandler(command string, handler handler) {
 	handlers[command] = handler
 }
 
-func GetLinkStats(conn *tls.Conn) {
+func GetLinkStats(conn *tls.Conn, logger log.Logger) {
 	for {
 		for _, hostname := range servers {
-			SendRaw(conn, fmt.Sprintf(":%s000000 STATS L %s", conf.Sid, hostname))
+			SendRaw(conn, fmt.Sprintf(":%d000000 STATS L %s", conf.Sid, hostname), logger)
 		}
 
 		time.Sleep(15 * time.Second)
@@ -98,6 +106,9 @@ func init() {
 	prometheus.MustRegister(statsSendQ)
 	prometheus.MustRegister(users)
 
+	// Version metric from github.com/prometheus/common
+	prometheus.MustRegister(version.NewCollector("unrealircd_exporter"))
+
 	// Register IRC Handlers
 	RegisterHandler("UID", UidHandler)
 	RegisterHandler("SID", SidHandler)
@@ -109,21 +120,39 @@ func init() {
 }
 
 func main() {
+	promConfig := promlog.Config{
+		Level: &promlog.AllowedLevel{},
+		Format: &promlog.AllowedFormat{},
+	}
+
+	flag.AddFlags(kingpin.CommandLine, &promConfig)
+	kingpin.Version(version.Print("blackbox_exporter"))
+	kingpin.HelpFlag.Short('h')
+	kingpin.Parse()
+	logger := promlog.New(&promConfig)
+
+	level.Info(logger).Log("msg", "Starting unrealircd_exporter", "version", version.Info())
+	level.Info(logger).Log("msg", "Build context", "context", version.BuildContext())
+
 	var err error
 	conf, err = LoadConfig("config.toml")
 	if err != nil {
-		log.Fatal(err.Error())
+		level.Error(logger).Log("error", err.Error())
 	}
 
 	cert, err := tls.LoadX509KeyPair(conf.Cert, conf.Key)
 	if err != nil {
-		log.Fatal(err)
+		level.Error(logger).Log("error", err.Error())
 	}
 
 	http.Handle("/metrics", promhttp.Handler())
 
 	go func() {
-		log.Fatal(http.ListenAndServe(conf.Listen, nil))
+		level.Info(logger).Log("msg", "Listening on address", "address", conf.Listen)
+		if err := http.ListenAndServe(conf.Listen, nil); err != nil {
+			level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
+			os.Exit(1)
+		}
 	}()
 
 	tlsConfig := &tls.Config{
@@ -135,23 +164,23 @@ func main() {
 	// TODO: check cert fingerprint
 	conn, err := tls.Dial("tcp", conf.Link, tlsConfig)
 	if err != nil {
-		log.Fatal(err)
+		level.Error(logger).Log("error", err.Error())
 	}
 
 	decoder := irc.NewDecoder(conn)
 	encoder := irc.NewEncoder(conn)
-	SendRaw(conn, "PASS password")
-	SendRaw(conn, fmt.Sprintf("PROTOCTL EAUTH=%s SID=%d ", conf.Name, conf.Sid))
-	SendRaw(conn, "PROTOCTL NOQUIT NICKv2 SJOIN SJ3 CLK TKLEXT TKLEXT2 NICKIP ESVID MLOCK EXTSWHOIS")
-	SendRaw(conn, fmt.Sprintf("SERVER %s 345 :Prometheus exporter", conf.Name))
-	SendRaw(conn, "EOS")
+	SendRaw(conn, "PASS password", logger)
+	SendRaw(conn, fmt.Sprintf("PROTOCTL EAUTH=%s SID=%d ", conf.Name, conf.Sid), logger)
+	SendRaw(conn, "PROTOCTL NOQUIT NICKv2 SJOIN SJ3 CLK TKLEXT TKLEXT2 NICKIP ESVID MLOCK EXTSWHOIS", logger)
+	SendRaw(conn, fmt.Sprintf("SERVER %s 345 :Prometheus exporter", conf.Name), logger)
+	SendRaw(conn, "EOS", logger)
 
 	// Create our own user so to have ircop capabilities
 	// UID nickname hopcount timestamp username hostname uid servicestamp umodes virthost cloakedhost ip :gecos
-	SendRaw(conn, fmt.Sprintf("UID P 0 0 Prometheus 127.0.0.1 %d000000 0 +Soip * %s * :Prometheus", conf.Sid, conf.Name))
+	SendRaw(conn, fmt.Sprintf("UID P 0 0 Prometheus 127.0.0.1 %d000000 0 +Soip * %s * :Prometheus", conf.Sid, conf.Name), logger)
 
 	// let's collect link stats
-	go GetLinkStats(conn)
+	go GetLinkStats(conn, logger)
 
 	// We already have the server we're connecting to and the exporter
 	serversCount.Set(2)
@@ -159,12 +188,14 @@ func main() {
 	for {
 		message, err := decoder.Decode()
 		if err != nil {
-			log.Fatal(err)
+			level.Error(logger).Log("error", err.Error())
 		}
+
+		level.Debug(logger).Log("msg", fmt.Sprintf("<-- %s\n", message.String()))
 
 		// Pass the ball to the corresponding handler
 		if _, ok := handlers[message.Command]; ok {
-			handlers[message.Command](encoder, message)
+			handlers[message.Command](encoder, message, logger)
 		}
 
 		// we don't want to count local events

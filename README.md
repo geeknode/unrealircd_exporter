@@ -17,8 +17,9 @@ Note: you might want to remove the snomask `e` from any oper as it will be quite
 
 Build
 -----
+Use https://github.com/prometheus/promu
 ```
-go build
+promu build
 ```
 
 Exporter Configuration
