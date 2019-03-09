@@ -2,35 +2,26 @@ package main
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
-	"gopkg.in/alecthomas/kingpin.v2"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/common/version"
+	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/sorcix/irc.v2"
 	"net/http"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 )
 
-type handler func(*irc.Encoder, *irc.Message, log.Logger)
+type handler func(*Context, *irc.Encoder, *irc.Message, log.Logger)
 
 var (
-	// holds current list of server, map SID to hostname
-	servers = make(map[string]string)
-
 	// maps irc commands (UID, SID, ...) to handler functions
 	handlers = make(map[string]handler)
-
-	// configuration items
-	conf *Config
 )
 
 func SendRaw(conn *tls.Conn, command string, logger log.Logger) {
@@ -39,54 +30,14 @@ func SendRaw(conn *tls.Conn, command string, logger log.Logger) {
 	fmt.Fprintf(conn, raw)
 }
 
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if strings.Contains(a, e) {
-			return true
-		}
-	}
-	return false
-}
-
-func ResolveServer(prefix string) (server string) {
-	// SID
-	if res, _ := regexp.MatchString("^[0-9]{3}$", prefix); res {
-		return servers[prefix]
-	}
-
-	// UID
-	if res, _ := regexp.MatchString("^[0-9]{3}", prefix); res {
-		return servers[prefix[:3]]
-	}
-
-	// hostname
-	if res, _ := regexp.MatchString(`^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.){2,}([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9]){2,}$`, prefix); res {
-		return prefix
-	}
-
-	// we don't know what it is
-	// most probably it's an user action but we don't have a user <> server map... yet
-	return "unknown"
-}
-
-func FindSidByHostname(hostname string) (sid string, err error) {
-	for key, value := range servers {
-		if value == hostname {
-			sid = key
-			return
-		}
-	}
-	return "", errors.New(fmt.Sprintf("Couldn't find a server named %s", hostname))
-}
-
 func RegisterHandler(command string, handler handler) {
 	handlers[command] = handler
 }
 
-func GetLinkStats(conn *tls.Conn, logger log.Logger) {
+func GetLinkStats(context *Context, conn *tls.Conn, sid int, logger log.Logger) {
 	for {
-		for _, hostname := range servers {
-			SendRaw(conn, fmt.Sprintf(":%d000000 STATS L %s", conf.Sid, hostname), logger)
+		for _, hostname := range context.GetServersHostnames() {
+			SendRaw(conn, fmt.Sprintf(":%d000000 STATS L %s", sid, hostname), logger)
 		}
 
 		time.Sleep(15 * time.Second)
@@ -114,14 +65,14 @@ func init() {
 	RegisterHandler("SID", SidHandler)
 	RegisterHandler("SQUIT", SquitHandler)
 	RegisterHandler("QUIT", QuitHandler)
-	RegisterHandler("PROTOCTL", ProtoctlHandler)
+	RegisterHandler("SERVER", ServerHandler)
 	RegisterHandler("PING", PingHandler)
 	RegisterHandler("211", StatsLHandler)
 }
 
 func main() {
 	promConfig := promlog.Config{
-		Level: &promlog.AllowedLevel{},
+		Level:  &promlog.AllowedLevel{},
 		Format: &promlog.AllowedFormat{},
 	}
 
@@ -135,7 +86,7 @@ func main() {
 	level.Info(logger).Log("msg", "Build context", "context", version.BuildContext())
 
 	var err error
-	conf, err = LoadConfig("config.toml")
+	conf, err := LoadConfig("config.toml")
 	if err != nil {
 		level.Error(logger).Log("error", err.Error())
 	}
@@ -167,6 +118,8 @@ func main() {
 		level.Error(logger).Log("error", err.Error())
 	}
 
+	context := NewContext()
+
 	decoder := irc.NewDecoder(conn)
 	encoder := irc.NewEncoder(conn)
 	SendRaw(conn, "PASS password", logger)
@@ -180,10 +133,10 @@ func main() {
 	SendRaw(conn, fmt.Sprintf("UID P 0 0 Prometheus 127.0.0.1 %d000000 0 +Soip * %s * :Prometheus", conf.Sid, conf.Name), logger)
 
 	// let's collect link stats
-	go GetLinkStats(conn, logger)
+	go GetLinkStats(context, conn, conf.Sid, logger)
 
 	// We already have the server we're connecting to and the exporter
-	serversCount.Set(2)
+	serversCount.Set(1)
 
 	for {
 		message, err := decoder.Decode()
@@ -195,7 +148,7 @@ func main() {
 
 		// Pass the ball to the corresponding handler
 		if _, ok := handlers[message.Command]; ok {
-			handlers[message.Command](encoder, message, logger)
+			handlers[message.Command](context, encoder, message, logger)
 		}
 
 		// we don't want to count local events
@@ -203,9 +156,15 @@ func main() {
 			continue
 		}
 
+		server, err := context.GetServer(message.Prefix.String())
+		if err != nil {
+			// if it's not a server then it's probably an user
+			continue
+		}
+
 		eventsCount.With(prometheus.Labels{
 			"event":  message.Command,
-			"server": ResolveServer(message.Prefix.String()),
+			"server": server.Hostname,
 		}).Inc()
 	}
 

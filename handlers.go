@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
 	"gopkg.in/sorcix/irc.v2"
 	"strconv"
 	"strings"
@@ -17,7 +17,7 @@ import (
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P services.geeknode.org[@33.44.55.66.52577][] 0 886999 46386 38403 2604 284301 0
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P fdn.geeknode.org[@44.55.66.77.60589][s] 0 564462 36871 324176 20894 290496 0
 // 2019/03/04 18:24:43 :hivane.geeknode.org 211 P icanhaz.geeknode.org[@::ffff:55.66.77.88.0][s] 0 872711 56582 3833 261 290504 0
-func StatsLHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
+func StatsLHandler(_ *Context, _ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	if message.Params[1] == "SendQ" {
 		// We skip the header
 		return
@@ -97,21 +97,33 @@ func StatsLHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	}).Set(idle)
 }
 
-// Example:
-// PROTOCTL NOQUIT NICKv2 SJOIN SJOIN2 UMODE2 VL SJ3 TKLEXT TKLEXT2 NICKIP ESVID
-// PROTOCTL CHANMODES=beIqa,kLf,l,psmntirzMQNRTOVKDdGPZSCc PREFIX=(ohv)@%+ NICKCHARS= SID=042 MLOCK TS=1551700803 EXTSWHOIS
-func ProtoctlHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
-	if contains(message.Params, "SID=") {
-		sid := strings.Split(message.Params[3], "=")[1]
-		hostname := strings.Split(conf.Link, ":")[0]
+// SERVER icanhaz.geeknode.org 1 :U4017-Fhin6OoEM-042 GeekNode Server
+func ServerHandler(context *Context, _ *irc.Encoder, message *irc.Message, _ log.Logger) {
+	hostname := message.Params[0]
+	sid := strings.Split(
+		strings.Split(message.Params[2], "-")[2],
+		" ",
+	)[0]
 
-		servers[sid] = hostname
-	}
+	context.AddServer(hostname, sid)
+
+	serversCount.Inc()
+
+	// initiate the user count, it'll increase with every UidHandler call
+	users.With(prometheus.Labels{
+		"server":     hostname,
+		"encryption": "plaintext",
+	}).Set(0)
+
+	users.With(prometheus.Labels{
+		"server":     hostname,
+		"encryption": "tls",
+	}).Set(0)
 }
 
 // Example
 // PING icanhaz.geeknode.org
-func PingHandler(encoder *irc.Encoder, message *irc.Message, logger log.Logger) {
+func PingHandler(_ *Context, encoder *irc.Encoder, message *irc.Message, logger log.Logger) {
 	response := irc.Message{
 		Prefix:  nil,
 		Command: irc.PONG,
@@ -128,32 +140,28 @@ func PingHandler(encoder *irc.Encoder, message *irc.Message, logger log.Logger) 
 	}
 }
 
-func SidHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
+func SidHandler(context *Context, _ *irc.Encoder, message *irc.Message, _ log.Logger) {
 	hostname := message.Params[0]
 	sid := message.Params[2]
 
-	servers[sid] = hostname
+	context.AddServer(hostname, sid)
 	serversCount.Inc()
 
 	// initiate the user count, it'll increase with every UidHandler call
 	users.With(prometheus.Labels{
-		"server": ResolveServer(message.Prefix.String()),
-		"mode":   "plaintext",
+		"server":     hostname,
+		"encryption": "plaintext",
 	}).Set(0)
 
 	users.With(prometheus.Labels{
-		"server": ResolveServer(message.Prefix.String()),
-		"mode":   "tls",
+		"server":     hostname,
+		"encryption": "tls",
 	}).Set(0)
 }
 
-func SquitHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
+func SquitHandler(context *Context, _ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	hostname := message.Params[0]
-	sid, err := FindSidByHostname(hostname)
-	if err != nil {
-		level.Error(logger).Log("error", err.Error())
-	}
-	delete(servers, sid)
+	context.RemoveServer(hostname)
 
 	serversCount.Dec()
 
@@ -162,31 +170,44 @@ func SquitHandler(_ *irc.Encoder, message *irc.Message, logger log.Logger) {
 	users.DeleteLabelValues(hostname, "tls")
 }
 
-func QuitHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
-	gauge := users.With(prometheus.Labels{
-		"server": ResolveServer(message.Prefix.String()),
-		"mode":   "tls",
-	})
-
-	if gauge == nil {
-		gauge = users.With(prometheus.Labels{
-			"server": ResolveServer(message.Prefix.String()),
-			"mode":   "plaintext",
-		})
+func QuitHandler(context *Context, _ *irc.Encoder, message *irc.Message, logger log.Logger) {
+	user, err := context.GetUser(message.Prefix.String())
+	if err != nil {
+		level.Error(logger).Log("error", err.Error())
+		return
 	}
 
-	gauge.Dec()
+	if user.Encryption {
+		users.With(prometheus.Labels{
+			"server":     user.Server.Hostname,
+			"encryption": "tls",
+		}).Dec()
+	} else {
+		users.With(prometheus.Labels{
+			"server":     user.Server.Hostname,
+			"encryption": "plaintext",
+		}).Dec()
+	}
 }
 
 // UID nickname hopcount timestamp username hostname uid servicestamp umodes virthost cloakedhost ip :gecos
-func UidHandler(_ *irc.Encoder, message *irc.Message, _ log.Logger) {
-	mode := "plaintext"
+func UidHandler(context *Context, _ *irc.Encoder, message *irc.Message, logger log.Logger) {
+	server, err := context.GetServer(message.Prefix.String())
+	if err != nil {
+		level.Error(logger).Log("error", err.Error())
+		return
+	}
+
+	encryption := "plaintext"
 	if strings.Contains(message.Params[7], "z") {
-		mode = "tls"
+		encryption = "tls"
+		context.AddUser(message.Params[0], message.Params[5], true, server.Hostname)
+	} else {
+		context.AddUser(message.Params[0], message.Params[5], false, server.Hostname)
 	}
 
 	users.With(prometheus.Labels{
-		"server": ResolveServer(message.Prefix.String()),
-		"mode":   mode,
+		"server":     server.Hostname,
+		"encryption": encryption,
 	}).Inc()
 }
