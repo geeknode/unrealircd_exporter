@@ -1,5 +1,7 @@
 module github.com/geeknode/unrealircd_exporter
 
+go 1.14
+
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc // indirect
@@ -16,5 +18,5 @@ require (
 	github.com/prometheus/common v0.0.0-20181126121408-4724e9255275
 	github.com/stretchr/testify v1.2.2 // indirect
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
-	gopkg.in/sorcix/irc.v2 v2.0.0-20180626144439-63eed78b082d
+	gopkg.in/sorcix/irc.v2 v2.0.0-20200812151606-3f15758ea8c7
 )

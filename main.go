@@ -116,6 +116,7 @@ func main() {
 	conn, err := tls.Dial("tcp", conf.Link, tlsConfig)
 	if err != nil {
 		level.Error(logger).Log("error", err.Error())
+		os.Exit(1)
 	}
 
 	context := NewContext()
@@ -125,7 +126,7 @@ func main() {
 	SendRaw(conn, "PASS password", logger)
 	SendRaw(conn, fmt.Sprintf("PROTOCTL EAUTH=%s SID=%d ", conf.Name, conf.Sid), logger)
 	SendRaw(conn, "PROTOCTL NOQUIT NICKv2 SJOIN SJ3 CLK TKLEXT TKLEXT2 NICKIP ESVID MLOCK EXTSWHOIS", logger)
-	SendRaw(conn, fmt.Sprintf("SERVER %s 345 :Prometheus exporter", conf.Name), logger)
+	SendRaw(conn, fmt.Sprintf("SERVER %s 1 :Prometheus exporter", conf.Name), logger)
 	SendRaw(conn, "EOS", logger)
 
 	// Create our own user so to have ircop capabilities
@@ -142,8 +143,8 @@ func main() {
 		message, err := decoder.Decode()
 		if err != nil {
 			level.Error(logger).Log("error", err.Error())
+			continue
 		}
-
 		level.Debug(logger).Log("msg", fmt.Sprintf("<-- %s\n", message.String()))
 
 		// Pass the ball to the corresponding handler
